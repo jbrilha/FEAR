@@ -10,6 +10,7 @@ use crate::{
 };
 
 pub mod app;
+pub mod directory;
 pub mod event;
 pub mod handler;
 pub mod tui;
