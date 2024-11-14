@@ -245,4 +245,17 @@ impl App {
             .cloned()
             .unwrap_or_default()
     }
+
+    pub fn delete_selection_or_cursor(&mut self) {
+        if !self.selections.is_empty() {
+            // self.selections.iter().map(|p| {
+            // }
+        } else if let Some(cursor) = &self.cursor {
+            if cursor.is_dir() || cursor.is_symlink() {
+                let _ = fs::remove_dir_all(cursor);
+            } else if cursor.is_file() {
+                let _ = fs::remove_file(cursor);
+            };
+        }
+    }
 }

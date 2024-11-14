@@ -31,6 +31,9 @@ pub fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<()> {
             app.toggle_selection_on_cursor();
             app.move_down();
         }
+        KeyCode::Char('d') => {
+            app.delete_selection_or_cursor();
+        }
         // Other handlers you could add here.
         _ => {}
     }
