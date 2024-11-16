@@ -1,7 +1,9 @@
 use std::{
     collections::{HashMap, HashSet},
     env, error, fs,
+    ops::Deref,
     path::PathBuf,
+    usize,
 };
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect, Size};
@@ -10,12 +12,45 @@ use crate::directory_entry::DirectoryEntry;
 
 pub type AppResult<T> = std::result::Result<T, Box<dyn error::Error>>;
 
+#[repr(u16)]
+enum DefaultConstraints {
+    Parent = 1,
+    Focus = 2,
+    Preview = 3,
+}
+
+#[derive(Debug)]
+pub struct AppCursor {
+    pub entry: PathBuf,
+    pub idx: usize,
+}
+impl Default for AppCursor {
+    fn default() -> Self {
+        Self {
+            entry: PathBuf::default(),
+            idx: 0,
+        }
+    }
+}
+
+impl AppCursor {
+    pub fn new(entry: PathBuf, idx: usize) -> Self {
+        Self { entry, idx }
+    }
+}
+
 #[derive(Debug)]
 pub struct App {
     pub running: bool,
+
+    area: Rect,
+
     pub titlebar_layout: Vec<Rect>,
+    pub message: Option<String>,
+    pub message_layout: Rect,
 
     parent_constraint: Constraint,
+    parent_needs_reset: bool,
     focus_constraint: Constraint,
     preview_constraint: Constraint,
     explorer_layout: Vec<Rect>,
@@ -27,14 +62,16 @@ pub struct App {
 
     pub show_preview: bool,
 
-    pub focus: DirectoryEntry,
+    pub focus_dir: DirectoryEntry,
     pub parent_dir: Option<DirectoryEntry>,
     pub preview: Option<PathBuf>,
 
     pub path_stack: Vec<(PathBuf, usize)>,
+    pub forward_stack: Vec<(PathBuf, usize)>,
     pub selections: HashMap<PathBuf, HashSet<PathBuf>>, // TODO go back to hashMap so delete doesn't do bad things
-    pub cursor: Option<PathBuf>,
-    pub cursor_idx: usize,
+    // pub cursor: Option<PathBuf>,
+    // pub cursor_idx: usize,
+    pub app_cursor: Option<AppCursor>,
     pub wrap: bool,
 }
 
@@ -44,18 +81,26 @@ impl Default for App {
         let current_dir =
             DirectoryEntry::new(curr_path.clone()).expect("Problem when creating parent directory");
 
-        let cursor = match current_dir.contents.get(0) {
-            Some(entry) => Some(entry.to_path_buf()),
+        let app_cursor = match current_dir.contents.get(0) {
+            Some(entry) => {
+                let entry_path = entry.to_path_buf();
+                Some(AppCursor::new(entry_path, 0))
+            }
             None => None,
         };
 
         Self {
+            area: Rect::default(),
             show_preview: true,
-            parent_constraint: Constraint::Percentage(15),
-            focus_constraint: Constraint::Percentage(35),
-            preview_constraint: Constraint::Percentage(50),
+            parent_constraint: Constraint::Fill(1),
+            parent_needs_reset: false,
+            focus_constraint: Constraint::Fill(2),
+            // preview_constraint: Constraint::Percentage(DefaultConstraints::Preview as u16),
+            preview_constraint: Constraint::Fill(3),
             running: true,
             titlebar_layout: vec![Rect::default()],
+            message_layout: Rect::default(),
+            message: None,
             base_layout: vec![Rect::default()],
             explorer_layout: vec![Rect::default()],
             parent_layout: Rect::default(),
@@ -77,10 +122,11 @@ impl Default for App {
                 .into_iter()
                 .rev()
                 .collect(),
-            cursor_idx: 0,
-            focus: current_dir,
-            preview: cursor.as_ref().cloned(),
-            cursor,
+            forward_stack: Vec::new(),
+            // cursor_idx: 0,
+            focus_dir: current_dir,
+            preview: app_cursor.as_ref().map(|c| c.entry.clone()),
+            app_cursor,
 
             selections: HashMap::new(),
             wrap: true,
@@ -92,15 +138,25 @@ impl App {
     /// Constructs a new instance of [`App`].
     pub fn new(size: Size) -> Self {
         let mut app = Self::default();
-        app.generate_layout(Rect::new(0, 0, size.width, size.height));
+        let area = Rect::new(0, 0, size.width, size.height);
+        app.generate_layout(area);
+        app.area = area;
         app
     }
 
-    pub fn generate_layout(&mut self, size: Rect) {
+    pub fn generate_layout(&mut self, area: Rect) {
+        self.area = area;
         self.base_layout = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Fill(1)].as_ref())
-            .split(size)
+            .constraints(
+                [
+                    Constraint::Length(1),
+                    Constraint::Fill(1),
+                    Constraint::Length(5),
+                ]
+                .as_ref(),
+            )
+            .split(area)
             .to_vec();
 
         self.titlebar_layout = Layout::default()
@@ -125,6 +181,8 @@ impl App {
         self.parent_layout = self.explorer_layout[0];
         self.focus_layout = self.explorer_layout[1];
         self.preview_layout = self.explorer_layout[2];
+
+        self.message_layout = self.base_layout[2];
     }
 
     /// Handles the tick event of the terminal.
@@ -134,7 +192,7 @@ impl App {
             None => Ok(()),
         };
 
-        let _ = self.focus.update();
+        let _ = self.focus_dir.update();
     }
 
     /// Set running to false to quit the application.
@@ -151,113 +209,156 @@ impl App {
     // }
 
     pub fn move_up(&mut self) {
-        if self.cursor_idx > 0 {
-            self.cursor_idx -= 1;
-        } else if self.wrap {
-            self.cursor_idx = self.focus.contents.len() - 1;
-        } else {
-            return;
-        }
+        if let Some(app_cursor) = &mut self.app_cursor {
+            let length = self.focus_dir.contents.len();
+            if app_cursor.idx >= length {
+                app_cursor.idx = length - 1
+            } else if app_cursor.idx > 0 {
+                app_cursor.idx -= 1
+            } else if self.wrap {
+                app_cursor.idx = length - 1
+            } else {
+                return;
+            }
 
-        self.cursor = self
-            .focus
-            .contents
-            .get(self.cursor_idx)
-            .map(|path| path.to_path_buf());
+            app_cursor.entry = self
+                .focus_dir
+                .contents
+                .get(app_cursor.idx)
+                .map(|path| path.to_path_buf())
+                .expect(&format!("{}", &app_cursor.idx.to_string()));
+        }
     }
 
     pub fn move_down(&mut self) {
-        if self.cursor_idx < self.focus.contents.len() - 1 {
-            self.cursor_idx += 1;
-        } else if self.wrap {
-            self.cursor_idx = 0;
-        } else {
-            return;
-        }
+        if let Some(app_cursor) = &mut self.app_cursor {
+            if app_cursor.idx < self.focus_dir.contents.len() - 1 {
+                app_cursor.idx += 1;
+            } else if self.wrap {
+                app_cursor.idx = 0
+            } else {
+                return;
+            }
 
-        self.cursor = self
-            .focus
-            .contents
-            .get(self.cursor_idx)
-            .map(|path| path.to_path_buf());
+            app_cursor.entry = self
+                .focus_dir
+                .contents
+                .get(app_cursor.idx)
+                .map(|path| path.to_path_buf())
+                .expect("why?");
+        }
     }
 
     pub fn move_back(&mut self) {
         if let Some((path, idx)) = self.path_stack.pop() {
-            self.cursor = Some(self.focus.path.clone());
-            self.cursor_idx = idx;
-            self.focus = DirectoryEntry::new(path).expect("Couldn't pop");
-            self.parent_dir = match self.focus.path.parent() {
+            let focus_dir_path = self.focus_dir.path.clone();
+            match &mut self.app_cursor {
+                Some(cursor) => {
+                    self.forward_stack
+                        .push((cursor.entry.clone(), cursor.idx));
+
+                    cursor.entry = focus_dir_path;
+                    cursor.idx = idx;
+                }
+                None => (),
+            }
+            self.focus_dir = DirectoryEntry::new(path).expect("Couldn't pop");
+            self.parent_dir = match self.focus_dir.path.parent() {
                 Some(parent) => Some(
                     DirectoryEntry::new(parent.to_path_buf())
                         .expect("Problem when creating directory"),
                 ),
-                None => None,
+                None => {
+                    self.set_parent_constraint(0);
+                    self.generate_layout(self.area);
+                    None
+                }
             };
         };
     }
 
     pub fn move_into(&mut self) {
-        match &self.cursor {
+        match &mut self.app_cursor {
+            Some(cursor) if cursor.entry.is_file() => {
+                // todo open in nvim
+                return;
+            }
             Some(cursor) => {
-                if cursor.is_file() {
-                    // todo open in nvim
-                    return;
+                let new_focus_dir = match DirectoryEntry::new(cursor.entry.clone()) {
+                    Ok(dir) => dir,
+                    Err(_) => {
+                        // panic!("shit");
+                        return;
+                    }
+                };
+
+                let cursor_idx = if let Some((_, idx)) = self.forward_stack.pop() {
+                    idx
+                } else {
+                    0
+                };
+                let curr_dir = std::mem::take(&mut self.focus_dir);
+                self.parent_dir = Some(curr_dir.clone());
+                if self.parent_needs_reset {
+                    self.reset_parent_constraint();
+                    self.generate_layout(self.area);
+                }
+                self.path_stack.push((curr_dir.path, cursor_idx));
+                self.focus_dir = new_focus_dir;
+
+                match self.focus_dir.contents.get(cursor_idx) {
+                    Some(cursor) => {
+                        let cursor_path = cursor.to_path_buf();
+
+                        self.app_cursor = Some(AppCursor::new(cursor_path, cursor_idx))
+                    }
+                    None => return,
                 }
             }
             None => return,
         }
-
-        let selected_path = std::mem::take(&mut self.cursor).unwrap();
-        let curr_dir = std::mem::take(&mut self.focus);
-        self.parent_dir = Some(curr_dir.clone());
-        self.path_stack.push((curr_dir.path, self.cursor_idx));
-        self.focus = DirectoryEntry::new(selected_path).expect("Couldn't create directory");
-
-        self.cursor_idx = 0;
-        self.cursor = self
-            .focus
-            .contents
-            .get(self.cursor_idx)
-            .map(|path| path.to_path_buf());
     }
 
     pub fn toggle_selection_on_cursor(&mut self) {
-        let cursor = self.cursor.clone();
+        let Some(cursor) = &self.app_cursor else {
+            return;
+        };
+
+        let c = cursor.entry.clone();
         let selections = self.current_selections_mut();
 
-        if let Some(c) = cursor {
-            if !selections.remove(&c) {
-                selections.insert(c);
-            }
+        if !selections.remove(&c) {
+            selections.insert(c);
         }
     }
 
     pub fn current_selections_mut(&mut self) -> &mut HashSet<PathBuf> {
         self.selections
-            .entry(self.focus.path.clone())
+            .entry(self.focus_dir.path.clone())
             .or_insert_with(HashSet::new)
     }
 
     pub fn current_selections(&self) -> HashSet<PathBuf> {
         self.selections
-            .get(&self.focus.path)
+            .get(&self.focus_dir.path)
             .cloned()
             .unwrap_or_default()
     }
 
     pub fn delete_selection_or_cursor(&mut self) {
         if !self.selections.is_empty() {
-            // self.selections.iter().map(|p| {
-            // }
-        } else if let Some(cursor) = &self.cursor {
-            if cursor.is_dir() || cursor.is_symlink() {
-                let _ = fs::remove_dir_all(cursor);
-            } else if cursor.is_file() {
-                let _ = fs::remove_file(cursor);
+            todo!("whoops");
+        } else if let Some(cursor) = &self.app_cursor {
+            let c_entry = cursor.entry.clone();
+
+            let _ = if cursor.entry.is_file() {
+                fs::remove_file(c_entry)
+            } else {
+                fs::remove_dir_all(c_entry)
             };
         }
     }
+
     pub fn set_parent_constraint(&mut self, percent: u16) {
         self.parent_needs_reset = true;
         // self.parent_constraint = Constraint::Percentage(percent);
