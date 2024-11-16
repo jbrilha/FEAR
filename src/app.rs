@@ -258,4 +258,29 @@ impl App {
             };
         }
     }
+    pub fn set_parent_constraint(&mut self, percent: u16) {
+        self.parent_needs_reset = true;
+        // self.parent_constraint = Constraint::Percentage(percent);
+        self.parent_constraint = Constraint::Fill(percent);
+    }
+
+    pub fn reset_parent_constraint(&mut self) {
+        // self.parent_constraint = Constraint::Percentage(DefaultConstraints::Parent as u16);
+        self.parent_constraint = Constraint::Fill(DefaultConstraints::Parent as u16);
+    }
+
+    pub fn forward_path(&self) -> Option<&PathBuf> {
+        match self.forward_stack.last() {
+            Some((p, _)) => Some(p),
+            None => None,
+        }
+    }
+
+    pub fn show_deletion_msg(&mut self) {
+        self.message = Some("Confirm delete [y/N]".to_string());
+    }
+
+    pub fn clear_msg(&mut self) {
+        self.message = None;
+    }
 }

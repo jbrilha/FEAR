@@ -1,9 +1,11 @@
 use std::{
-    any, fs, io, path::{Path, PathBuf}
+    fs, io,
+    path::{Path, PathBuf},
 };
 
+use lopdf::Document;
 use ratatui::{
-    layout::Alignment,
+    layout::{Alignment, Constraint},
     style::{Color, Style},
     text::{Line, Text},
     widgets::{Block, Borders, Padding, Paragraph},
@@ -22,20 +24,17 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     // - https://docs.rs/ratatui/latest/ratatui/widgets/index.html
     // - https://github.com/ratatui/ratatui/tree/master/examples
 
-    frame.render_widget(
-        title_bar(&app.focus.path),
-        app.titlebar_layout[0],
-    );
+    frame.render_widget(title_bar(&app.focus_dir.path), app.titlebar_layout[0]);
 
-    frame.render_widget(
-        info_bar(&app.focus.path),
-        app.titlebar_layout[1],
-    );
+    frame.render_widget(info_bar(&app.focus_dir.path), app.titlebar_layout[1]);
 
-    frame.render_widget(
-        parent_pane(app, app.parent_layout.width.into()),
-        app.parent_layout,
-    );
+    match &app.parent_dir {
+        Some(_) => frame.render_widget(
+            parent_pane(app, app.parent_layout.width.into()),
+            app.parent_layout,
+        ),
+        None => {}
+    }
 
     frame.render_widget(
         focus_pane(app, app.focus_layout.width.into()),
@@ -46,6 +45,44 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         preview_pane(app, app.preview_layout.width.into()),
         app.preview_layout,
     );
+
+    // match &app.message {
+    //     Some(m) =>
+    if let Some(cursor) = &app.app_cursor {
+        frame.render_widget(
+            Paragraph::new(Text::from(
+                cursor.idx.to_string()
+                    + &app
+                        .path_stack
+                        .iter()
+                        .map(|(pb, idx)| format!("{} : {}", pb.to_string_lossy(), idx))
+                        .collect::<Vec<String>>()
+                        .join(" | ")
+                    + "\n"
+                    + &app
+                        .forward_stack
+                        .iter()
+                        .map(|(pb, idx)| format!("{} : {}", pb.to_string_lossy(), idx))
+                        .collect::<Vec<String>>()
+                        .join(" | "),
+            ))
+            .block(Block::default().borders(Borders::TOP))
+            .style(Style::default().fg(Color::Cyan)),
+            app.message_layout,
+        );
+    }
+
+    // frame.render_widget(
+    //     Paragraph::new(Text::from(format!("{} @ ", app.app_cursor.expect("fds").idx.to_string()) +
+    // &app.path_stack
+    //     .iter()
+    //     .map(|(pb, idx)| format!("{} : {}", pb.to_string_lossy(), idx))
+    //     .collect::<Vec<String>>().join(" | ")
+    //     ))
+    //     .block(Block::default().borders(Borders::TOP))
+    //     .style(Style::default().fg(Color::Cyan)),
+    //     app.message_layout,
+    // );
 }
 
 fn title_bar(path: &Path) -> Paragraph {
@@ -87,7 +124,7 @@ fn parent_pane(app: &App, width: usize) -> Paragraph {
 
 fn focus_pane(app: &App, width: usize) -> Paragraph {
     let paths: Vec<Line> = app
-        .focus
+        .focus_dir
         .contents
         .iter()
         .map(|path| format_line(app, path.to_path_buf(), width, PaneContext::Focus))
@@ -106,9 +143,9 @@ fn focus_pane(app: &App, width: usize) -> Paragraph {
 }
 
 fn preview_pane(app: &App, width: usize) -> Paragraph {
-    let preview = match &app.cursor {
+    let preview = match &app.app_cursor {
         Some(cursor) => {
-            let selected = Path::new(&cursor);
+            let selected = Path::new(&cursor.entry);
             if selected.is_dir() {
                 let sub_paths: Vec<Line> = match fs::read_dir(selected) {
                     Ok(dir) => {
@@ -132,19 +169,38 @@ fn preview_pane(app: &App, width: usize) -> Paragraph {
                 };
 
                 if sub_paths.is_empty() {
-                    Text::from("Empty...")
+                    Text::from("Empty...").style(Style::default().fg(Color::Red).bg(Color::Black))
                 } else {
                     Text::from(sub_paths)
                     // sub_paths.sort();
                     // sub_paths.join("\n")
                 }
             } else if selected.is_file() {
-                Text::from(
-                    fs::read_to_string(selected)
-                        .unwrap_or_else(|_| "Failed to parse whatever that is".to_string()),
-                )
+                if selected
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map_or(false, |e| e.eq_ignore_ascii_case("pdf"))
+                {
+                    let doc = Document::load(selected);
+                    match doc {
+                        Ok(document) => {
+                            let text = document
+                                .extract_text(&[1])
+                                .unwrap_or("Failed to parse PDF".to_string());
+                            Text::from(text).style(Style::default().fg(Color::White))
+                        }
+                        Err(err) => Text::from(format!("{}", err)),
+                    }
+                } else {
+                    Text::from(
+                        fs::read_to_string(selected)
+                            .unwrap_or_else(|_| "Failed to parse whatever that is".to_string()),
+                    )
+                    .style(Style::default().fg(Color::White))
+                }
             } else {
-                Text::from("Neither a file nor a directory...")
+                Text::from("Unkwnown entry type")
+                    .style(Style::default().fg(Color::Red).bg(Color::Black))
             }
         }
         None => Text::from("nope"),
@@ -177,8 +233,9 @@ fn format_line(app: &App, path: PathBuf, width: usize, ctx: PaneContext) -> Line
         }
         basename = MARK.to_owned() + &basename;
     }
-    if Some(&path) == app.cursor.as_ref()
-        || (matches!(ctx, PaneContext::Parent) && app.focus.path == path)
+    if app.app_cursor.as_ref().map(|c| &c.entry).eq(&Some(&path))
+        || (matches!(ctx, PaneContext::Parent) && app.focus_dir.path == path)
+        || (matches!(ctx, PaneContext::Preview) && app.forward_path() == Some(&path))
     {
         bg_color = fg_color;
         fg_color = Color::Black;

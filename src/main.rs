@@ -1,17 +1,19 @@
 use std::io;
 
+use handler::KeyHandler;
 use ratatui::{backend::CrosstermBackend, layout::Rect, Terminal};
 
 use crate::{
     app::{App, AppResult},
     event::{Event, EventHandler},
-    handler::handle_key_events,
     tui::Tui,
 };
 
 pub mod app;
 pub mod sorter;
+pub mod filesystem_entry;
 pub mod directory_entry;
+pub mod file_entry;
 pub mod event;
 pub mod handler;
 pub mod tui;
@@ -24,6 +26,7 @@ async fn main() -> AppResult<()> {
     let terminal = Terminal::new(backend)?;
     let size = terminal.size();
     let events = EventHandler::new(250);
+    let mut keys = KeyHandler::new();
     let mut tui = Tui::new(terminal, events);
     tui.init()?;
 
@@ -37,7 +40,7 @@ async fn main() -> AppResult<()> {
         // Handle events.
         match tui.events.next().await? {
             Event::Tick => app.tick(),
-            Event::Key(key_event) => handle_key_events(key_event, &mut app)?,
+            Event::Key(key_event) => keys.handle_key_events(key_event, &mut app)?,
             Event::Mouse(_) => {}
             Event::Resize(width, height) => {
                 app.generate_layout(Rect::new(0, 0, width, height));
@@ -47,5 +50,6 @@ async fn main() -> AppResult<()> {
 
     // Exit the user interface.
     tui.exit()?;
+    eprintln!("{}", app.focus_dir.path.display());
     Ok(())
 }
