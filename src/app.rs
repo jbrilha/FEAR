@@ -346,8 +346,20 @@ impl App {
     }
 
     pub fn delete_selection_or_cursor(&mut self) {
+        // TODO some sort of trash bin to undo deletions?
         if !self.selections.is_empty() {
-            todo!("whoops");
+            
+            if let Some(selections) = self.selections.get_mut(&self.focus_dir.path) {
+                selections.retain(|path| {
+                    match fs::remove_file(path).or_else(|_| fs::remove_dir_all(path)) {
+                        Ok(_) => false,
+                        Err(e) => {
+                            eprintln!("{}", e);
+                            true
+                        }
+                    }
+                })
+            }
         } else if let Some(cursor) = &self.app_cursor {
             let c_entry = cursor.entry.clone();
 
@@ -378,7 +390,26 @@ impl App {
     }
 
     pub fn show_deletion_msg(&mut self) {
-        self.message = Some("Confirm delete [y/N]".to_string());
+        let selections_len = self.selections.get(&self.focus_dir.path)
+            .map_or(0, |s| s.len());
+
+        if selections_len != 0 {
+            self.message = Some(format!(
+                "Confirm deletion of {} files? [y/N]",
+                selections_len
+            ));
+            return;
+        }
+
+        if let Some(cursor) = &self.app_cursor {
+            self.message = Some(format!(
+                "Confirm deletion of \"{}\" [y/N]",
+                cursor.entry
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+            ));
+        }
     }
 
     pub fn clear_msg(&mut self) {
