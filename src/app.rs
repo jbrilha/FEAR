@@ -1,14 +1,12 @@
 use std::{
     collections::{HashMap, HashSet},
     env, error, fs,
-    ops::Deref,
     path::PathBuf,
-    usize,
 };
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect, Size};
 
-use crate::directory_entry::DirectoryEntry;
+use crate::{directory_entry::DirectoryEntry, input::Input};
 
 pub type AppResult<T> = std::result::Result<T, Box<dyn error::Error>>;
 
@@ -24,14 +22,15 @@ pub struct AppCursor {
     pub entry: PathBuf,
     pub idx: usize,
 }
-impl Default for AppCursor {
-    fn default() -> Self {
-        Self {
-            entry: PathBuf::default(),
-            idx: 0,
-        }
-    }
-}
+
+// impl Default for AppCursor {
+//     fn default() -> Self {
+//         Self {
+//             entry: PathBuf::default(),
+//             idx: 0,
+//         }
+//     }
+// }
 
 impl AppCursor {
     pub fn new(entry: PathBuf, idx: usize) -> Self {
@@ -66,13 +65,15 @@ pub struct App {
     pub parent_dir: Option<DirectoryEntry>,
     pub preview: Option<PathBuf>,
 
-    pub path_stack: Vec<(PathBuf, usize)>,
-    pub forward_stack: Vec<(PathBuf, usize)>,
+    pub path_stack: Vec<PathBuf>,
+    pub forward_stack: Vec<PathBuf>,
     pub selections: HashMap<PathBuf, HashSet<PathBuf>>, // TODO go back to hashMap so delete doesn't do bad things
     // pub cursor: Option<PathBuf>,
     // pub cursor_idx: usize,
     pub app_cursor: Option<AppCursor>,
     pub wrap: bool,
+
+    pub input: Option<Input>,
 }
 
 impl Default for App {
@@ -117,7 +118,7 @@ impl Default for App {
             path_stack: curr_path
                 .ancestors()
                 .skip(1) // skip current dir so path_stack.pop doesn't put me back in it
-                .map(|a| (a.to_path_buf(), 0))
+                .map(|a| a.to_path_buf())
                 .collect::<Vec<_>>()
                 .into_iter()
                 .rev()
@@ -130,6 +131,7 @@ impl Default for App {
 
             selections: HashMap::new(),
             wrap: true,
+            input: None,
         }
     }
 }
@@ -250,15 +252,14 @@ impl App {
     }
 
     pub fn move_back(&mut self) {
-        if let Some((path, idx)) = self.path_stack.pop() {
+        if let Some(path) = self.path_stack.pop() {
             let focus_dir_path = self.focus_dir.path.clone();
             match &mut self.app_cursor {
                 Some(cursor) => {
-                    self.forward_stack
-                        .push((cursor.entry.clone(), cursor.idx));
+                    self.forward_stack.push(cursor.entry.clone());
 
                     cursor.entry = focus_dir_path;
-                    cursor.idx = idx;
+                    cursor.idx = 1;
                 }
                 None => (),
             }
@@ -292,8 +293,8 @@ impl App {
                     }
                 };
 
-                let cursor_idx = if let Some((_, idx)) = self.forward_stack.pop() {
-                    idx
+                let cursor_idx = if let Some(_) = self.forward_stack.pop() {
+                    1
                 } else {
                     0
                 };
@@ -303,12 +304,22 @@ impl App {
                     self.reset_parent_constraint();
                     self.generate_layout(self.area);
                 }
-                self.path_stack.push((curr_dir.path, cursor_idx));
+                self.path_stack.push(curr_dir.path);
                 self.focus_dir = new_focus_dir;
 
                 match self.focus_dir.contents.get(cursor_idx) {
                     Some(cursor) => {
                         let cursor_path = cursor.to_path_buf();
+                        let first_entry = cursor_path
+                            .read_dir()
+                            .map(|entry| entry.map(|p| p.expect("W").path()))
+                            .expect("B")
+                            .collect();
+
+                        self.forward_stack.push(first_entry);
+                        // let mut contents = fs::read_dir(&path)?
+                        //         .map(|res| res.map(|e| e.path()))
+                        //         .collect::<Result<Vec<_>, io::Error>>()?;
 
                         self.app_cursor = Some(AppCursor::new(cursor_path, cursor_idx))
                     }
@@ -348,7 +359,6 @@ impl App {
     pub fn delete_selection_or_cursor(&mut self) {
         // TODO some sort of trash bin to undo deletions?
         if !self.selections.is_empty() {
-            
             if let Some(selections) = self.selections.get_mut(&self.focus_dir.path) {
                 selections.retain(|path| {
                     match fs::remove_file(path).or_else(|_| fs::remove_dir_all(path)) {
@@ -382,15 +392,14 @@ impl App {
         self.parent_constraint = Constraint::Fill(DefaultConstraints::Parent as u16);
     }
 
-    pub fn forward_path(&self) -> Option<&PathBuf> {
-        match self.forward_stack.last() {
-            Some((p, _)) => Some(p),
-            None => None,
-        }
-    }
+    // pub fn forward_path(&self) -> Option<&PathBuf> {
+    //     self.forward_stack.last()
+    // }
 
     pub fn show_deletion_msg(&mut self) {
-        let selections_len = self.selections.get(&self.focus_dir.path)
+        let selections_len = self
+            .selections
+            .get(&self.focus_dir.path)
             .map_or(0, |s| s.len());
 
         if selections_len != 0 {
@@ -404,7 +413,8 @@ impl App {
         if let Some(cursor) = &self.app_cursor {
             self.message = Some(format!(
                 "Confirm deletion of \"{}\" [y/N]",
-                cursor.entry
+                cursor
+                    .entry
                     .file_name()
                     .unwrap_or_default()
                     .to_string_lossy()
@@ -412,7 +422,75 @@ impl App {
         }
     }
 
+    pub fn show_rename_msg(&mut self) {
+        // TODO batch rename in place, like oil.nvim
+        //
+        // maybe something like a Map of PathBuf to newName then loop over map
+        // values and do fs::rename on them?
+        //
+        // the problem is that I need to map the "actions" in the sense that
+        // multi-line editing should make the same changes to each line
+        //
+        // although... I could iterate through the selections* whenever a key
+        // is pressed and call the same function on it (like insert_char etc)
+        // and that would also allow for real-time visuals instead of what vim
+        // does (updating all the lines only after ENTER)
+        //
+        // *I actually mean the focus_dir.contents because that's what's
+        // displayed fr, but to avoid breaking shit maybe I should keep
+        // two buffers? one with valid PathBufs and one with their display?
+        // we'll see (who is we)
+
+        // let selections_len = self
+        //     .selections
+        //     .get(&self.focus_dir.path)
+        //     .map_or(0, |s| s.len());
+        //
+        // if selections_len != 0 {
+        //     self.message = Some(format!(
+        //         "Confirm deletion of {} files? [y/N]",
+        //         selections_len
+        //     ));
+        //     return;
+        // }
+
+        if let Some(cursor) = &self.app_cursor {
+            self.message = Some(format!(
+                "Rename \"{}\" to: ",
+                cursor
+                    .entry
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+            ));
+
+            self.input = Some(Input::default());
+        }
+    }
+
     pub fn clear_msg(&mut self) {
         self.message = None;
+    }
+
+    pub fn delete_char(&mut self) {
+        if let Some(input) = &mut self.input {
+            input.delete_char();
+        }
+    }
+
+    pub fn terminate_input(&mut self) {
+        if let Some(cursor) = &self.app_cursor {
+            if let Some(input) = &self.input {
+                let _ = fs::rename(&cursor.entry, &input.content);
+                self.input = None;
+                let _ = self.focus_dir.update();
+            }
+        }
+    }
+
+    pub fn insert_char(&mut self, ch: char) {
+        if let Some(input) = &mut self.input {
+            input.insert_char(ch);
+        }
     }
 }

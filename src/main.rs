@@ -11,6 +11,7 @@ use crate::{
 
 pub mod app;
 pub mod sorter;
+pub mod input;
 pub mod filesystem_entry;
 pub mod directory_entry;
 pub mod file_entry;

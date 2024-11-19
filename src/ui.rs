@@ -5,7 +5,7 @@ use std::{
 
 use lopdf::Document;
 use ratatui::{
-    layout::{Alignment, Constraint},
+    layout::{Alignment, Constraint, Position},
     style::{Color, Style},
     text::{Line, Text},
     widgets::{Block, Borders, Padding, Paragraph},
@@ -46,31 +46,54 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         app.preview_layout,
     );
 
-    // match &app.message {
-    //     Some(m) =>
-    if let Some(cursor) = &app.app_cursor {
-        frame.render_widget(
-            Paragraph::new(Text::from(
-                cursor.idx.to_string()
-                    + &app
-                        .path_stack
-                        .iter()
-                        .map(|(pb, idx)| format!("{} : {}", pb.to_string_lossy(), idx))
-                        .collect::<Vec<String>>()
-                        .join(" | ")
-                    + "\n"
-                    + &app
-                        .forward_stack
-                        .iter()
-                        .map(|(pb, idx)| format!("{} : {}", pb.to_string_lossy(), idx))
-                        .collect::<Vec<String>>()
-                        .join(" | "),
-            ))
-            .block(Block::default().borders(Borders::TOP))
-            .style(Style::default().fg(Color::Cyan)),
-            app.message_layout,
-        );
+    if let Some(m) = &app.message {
+        match &app.input {
+            Some(input) => {
+                frame.render_widget(
+                    Paragraph::new(Text::from(m.to_string() + &input.content))
+                        .block(Block::default().borders(Borders::TOP))
+                        .style(Style::default().fg(Color::Cyan)),
+                    app.message_layout,
+                );
+                frame.set_cursor_position(Position::new(
+                    app.message_layout.x + (m.chars().count() + input.char_idx) as u16,
+                    app.message_layout.y + 1,
+                ));
+            }
+            None => {
+                frame.render_widget(
+                    Paragraph::new(Text::from(m.to_string()))
+                        .block(Block::default().borders(Borders::TOP))
+                        .style(Style::default().fg(Color::Cyan)),
+                    app.message_layout,
+                );
+            }
+        }
     }
+
+    // if let Some(cursor) = &app.app_cursor {
+    //     frame.render_widget(
+    //         Paragraph::new(Text::from(
+    //             cursor.idx.to_string()
+    //                 + &app
+    //                     .path_stack
+    //                     .iter()
+    //                     .map(|pb| format!("{} : {}", pb.to_string_lossy(), 0))
+    //                     .collect::<Vec<String>>()
+    //                     .join(" | ")
+    //                 + "\n"
+    //                 + &app
+    //                     .forward_stack
+    //                     .iter()
+    //                     .map(|pb| format!("{} : {}", pb.to_string_lossy(), 0))
+    //                     .collect::<Vec<String>>()
+    //                     .join(" | "),
+    //         ))
+    //         .block(Block::default().borders(Borders::TOP))
+    //         .style(Style::default().fg(Color::Cyan)),
+    //         app.message_layout,
+    //     );
+    // }
 
     // frame.render_widget(
     //     Paragraph::new(Text::from(format!("{} @ ", app.app_cursor.expect("fds").idx.to_string()) +
@@ -235,7 +258,7 @@ fn format_line(app: &App, path: PathBuf, width: usize, ctx: PaneContext) -> Line
     }
     if app.app_cursor.as_ref().map(|c| &c.entry).eq(&Some(&path))
         || (matches!(ctx, PaneContext::Parent) && app.focus_dir.path == path)
-        || (matches!(ctx, PaneContext::Preview) && app.forward_path() == Some(&path))
+        || (matches!(ctx, PaneContext::Preview) && (app.forward_stack.last() == Some(&path)))
     {
         bg_color = fg_color;
         fg_color = Color::Black;
