@@ -5,10 +5,13 @@ use std::{
 
 use lopdf::Document;
 use ratatui::{
-    layout::{Alignment, Constraint, Position},
+    layout::{Alignment, Constraint, Margin, Position},
     style::{Color, Style},
+    symbols::scrollbar::{self, Set},
     text::{Line, Text},
-    widgets::{Block, Borders, Padding, Paragraph},
+    widgets::{
+        Block, Borders, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    },
     Frame,
 };
 
@@ -23,28 +26,18 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     // See the following resources:
     // - https://docs.rs/ratatui/latest/ratatui/widgets/index.html
     // - https://github.com/ratatui/ratatui/tree/master/examples
+    render_title_bar(frame, app);
 
-    frame.render_widget(title_bar(&app.focus_dir.path), app.titlebar_layout[0]);
-
-    frame.render_widget(info_bar(&app.focus_dir.path), app.titlebar_layout[1]);
+    render_info_bar(frame, app);
 
     match &app.parent_dir {
-        Some(_) => frame.render_widget(
-            parent_pane(app, app.parent_layout.width.into()),
-            app.parent_layout,
-        ),
+        Some(_) => render_parent_pane(frame, app),
         None => {}
     }
 
-    frame.render_widget(
-        focus_pane(app, app.focus_layout.width.into()),
-        app.focus_layout,
-    );
+    render_focus_pane(frame, app);
 
-    frame.render_widget(
-        preview_pane(app, app.preview_layout.width.into()),
-        app.preview_layout,
-    );
+    render_preview_pane(frame, app);
 
     if let Some(m) = &app.message {
         match &app.input {
@@ -108,44 +101,64 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     // );
 }
 
-fn title_bar(path: &Path) -> Paragraph {
-    Paragraph::new("")
+fn render_title_bar(frame: &mut Frame, app: &App) {
+    let path = &app.focus_dir.path;
+
+    let p = Paragraph::new("")
         .block(
             Block::default()
                 .title(format!("— {} ", path.to_string_lossy().into_owned()))
                 .borders(Borders::TOP),
         )
-        .style(Style::default().fg(Color::Cyan))
+        .style(Style::default().fg(Color::Cyan));
+
+    frame.render_widget(p, app.titlebar_layout[0]);
 }
 
-fn info_bar(_path: &Path) -> Paragraph {
-    Paragraph::new("")
+fn render_info_bar(frame: &mut Frame, app: &App) {
+    let scroll_pos = match &app.app_cursor {
+        Some(c) => c.idx,
+        None => 0,
+    };
+    let p = Paragraph::new("")
         .block(
             Block::default()
-                .title(" placeholder | will be dir info? ")
+                .title(format!("{} | {}", scroll_pos, app.focus_layout.height))
                 .title_alignment(Alignment::Right)
                 .borders(Borders::TOP),
         )
-        .style(Style::default().fg(Color::Cyan))
+        .style(Style::default().fg(Color::Cyan));
+
+    frame.render_widget(p, app.titlebar_layout[1]);
 }
 
-fn parent_pane(app: &App, width: usize) -> Paragraph {
+fn render_parent_pane(frame: &mut Frame, app: &App) {
     let paths: Vec<Line> = app.parent_dir.as_ref().map_or_else(
         || Vec::new(),
         |dir| {
             dir.contents
                 .iter()
-                .map(|path| format_line(app, path.to_path_buf(), width, PaneContext::Parent))
+                .map(|path| {
+                    format_line(
+                        app,
+                        path.to_path_buf(),
+                        app.parent_layout.width.into(),
+                        PaneContext::Parent,
+                    )
+                })
                 .collect()
         },
     );
 
-    Paragraph::new(Text::from(paths))
+    let p = Paragraph::new(Text::from(paths))
         .block(Block::default())
-        .style(Style::default().fg(Color::Cyan))
+        .style(Style::default().fg(Color::Cyan));
+
+    frame.render_widget(p, app.parent_layout)
 }
 
-fn focus_pane(app: &App, width: usize) -> Paragraph {
+fn render_focus_pane(frame: &mut Frame, app: &App) {
+    let width = app.focus_layout.width.into();
     let paths: Vec<Line> = app
         .focus_dir
         .contents
@@ -160,12 +173,50 @@ fn focus_pane(app: &App, width: usize) -> Paragraph {
         Text::from(paths)
     };
 
-    Paragraph::new(display)
+    let scroll_pos = match &app.app_cursor {
+        Some(c) => {
+            let idx = c.idx;
+            let height = app.focus_layout.height as usize;
+            let lines = display.lines.len();
+
+            if lines <= height {
+                0
+            } else {
+                let middle = height / 2;
+
+                if idx >= lines.saturating_sub(middle) {
+                    lines.saturating_sub(height)
+                } else {
+                    idx.saturating_sub(middle)
+                }
+            }
+        }
+        None => 0,
+    };
+
+    let p = Paragraph::new(display)
         .block(Block::default().padding(Padding::symmetric(1, 0)))
-        .style(Style::default().fg(Color::Cyan))
+        .scroll((scroll_pos as u16, 0))
+        .style(Style::default().fg(Color::Cyan));
+
+    frame.render_widget(p, app.focus_layout);
+    // let mut scroll_state: ScrollbarState = ScrollbarState::default().position(scroll_pos);
+    // frame.render_stateful_widget(
+    //     Scrollbar::new(ScrollbarOrientation::VerticalLeft)
+    //         .symbols(scrollbar::VERTICAL)
+    //         .begin_symbol(None)
+    //         .track_symbol(None)
+    //         .end_symbol(None),
+    //     app.focus_layout.inner(Margin {
+    //         vertical: 1,
+    //         horizontal: 0,
+    //     }),
+    //     &mut scroll_state,
+    // );
 }
 
-fn preview_pane(app: &App, width: usize) -> Paragraph {
+fn render_preview_pane(frame: &mut Frame, app: &App) {
+    let width = app.preview_layout.width.into();
     let preview = match &app.app_cursor {
         Some(cursor) => {
             let selected = Path::new(&cursor.entry);
@@ -229,9 +280,11 @@ fn preview_pane(app: &App, width: usize) -> Paragraph {
         None => Text::from("nope"),
     };
 
-    Paragraph::new(preview)
+    let p = Paragraph::new(preview)
         .block(Block::default())
-        .style(Style::default().fg(Color::Cyan))
+        .style(Style::default().fg(Color::Cyan));
+
+    frame.render_widget(p, app.preview_layout);
 }
 
 enum PaneContext {
@@ -256,7 +309,8 @@ fn format_line(app: &App, path: PathBuf, width: usize, ctx: PaneContext) -> Line
         }
         basename = MARK.to_owned() + &basename;
     }
-    if app.app_cursor.as_ref().map(|c| &c.entry).eq(&Some(&path))
+    if (matches!(ctx, PaneContext::Focus)
+        && app.app_cursor.as_ref().map(|c| &c.entry).eq(&Some(&path)))
         || (matches!(ctx, PaneContext::Parent) && app.focus_dir.path == path)
         || (matches!(ctx, PaneContext::Preview) && (app.forward_stack.last() == Some(&path)))
     {
