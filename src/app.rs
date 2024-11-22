@@ -259,16 +259,20 @@ impl App {
     pub fn move_back(&mut self) {
         if let Some(path) = self.path_stack.pop() {
             let focus_dir_path = self.focus_dir.path.clone();
-            match &mut self.app_cursor {
-                Some(cursor) => {
-                    self.forward_stack.push(cursor.entry.clone());
 
-                    cursor.entry = focus_dir_path;
-                    cursor.idx = 1;
-                }
-                None => (),
-            }
             self.focus_dir = DirectoryEntry::new(path).expect("Couldn't pop");
+
+            let cursor_idx = match &self.parent_dir {
+                Some(parent) => parent
+                    .contents
+                    .iter()
+                    .position(|p| p == &focus_dir_path)
+                    .unwrap_or(0),
+                None => 0,
+            };
+
+            self.app_cursor = Some(AppCursor::new(focus_dir_path, cursor_idx));
+
             self.parent_dir = match self.focus_dir.path.parent() {
                 Some(parent) => Some(
                     DirectoryEntry::new(parent.to_path_buf())
@@ -304,7 +308,7 @@ impl App {
         #[cfg(target_os = "linux")]
         Command::new("nvim")
             .arg(entry)
-            .spawn()
+            .status()
             .expect("Failed to open nvim");
 
         let _ = crossterm::execute!(std::io::stdout(), EnterAlternateScreen);
@@ -342,8 +346,8 @@ impl App {
                 self.focus_dir = new_focus_dir;
 
                 match self.focus_dir.contents.get(cursor_idx) {
-                    Some(cursor) => {
-                        let cursor_path = cursor.to_path_buf();
+                    Some(c) => {
+                        let cursor_path = c.to_path_buf();
                         // let first_entry = cursor_path
                         //     .read_dir()
                         //     .map(|entry| entry.map(|p| p.expect("W").path()))
