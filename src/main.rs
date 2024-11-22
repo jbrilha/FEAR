@@ -10,13 +10,13 @@ use crate::{
 };
 
 pub mod app;
-pub mod sorter;
-pub mod input;
-pub mod filesystem_entry;
 pub mod directory_entry;
-pub mod file_entry;
 pub mod event;
+pub mod file_entry;
+pub mod filesystem_entry;
 pub mod handler;
+pub mod input;
+pub mod sorter;
 pub mod tui;
 pub mod ui;
 
@@ -39,6 +39,7 @@ async fn main() -> AppResult<()> {
         // Render the user interface.
         tui.draw(&mut app)?;
         // Handle events.
+
         match tui.events.next().await? {
             Event::Tick => app.tick(),
             Event::Key(key_event) => keys.handle_key_events(key_event, &mut app)?,

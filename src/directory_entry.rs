@@ -34,7 +34,7 @@ impl DirectoryEntry {
         let mut contents = fs::read_dir(&path)?
                 .map(|res| res.map(|e| e.path()))
                 .collect::<Result<Vec<_>, io::Error>>()?;
-        contents.sort_by(|a, b|SORTER.paths(a, b));
+        contents.sort_by(|a, b| SORTER.paths(a, b));
 
         Ok(Self {
             contents,
@@ -57,7 +57,7 @@ impl DirectoryEntry {
         self.contents = fs::read_dir(&self.path)?
                 .map(|res| res.map(|e| e.path()))
                 .collect::<Result<Vec<_>, io::Error>>()?;
-        self.contents.sort_by(|a, b|SORTER.paths(a, b));
+        self.contents.sort_by(|a, b| SORTER.paths(a, b));
 
         self.last_update = Instant::now();
         Ok(())

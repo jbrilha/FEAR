@@ -1,12 +1,15 @@
 use std::{
     collections::{HashMap, HashSet},
-    env, error, fs,
+    env, error,
+    fmt::Display,
+    fs,
     path::PathBuf,
+    process::Command,
 };
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect, Size};
 
-use crate::{directory_entry::DirectoryEntry, input::Input};
+use crate::{directory_entry::DirectoryEntry, input::Input, tui::Tui};
 
 pub type AppResult<T> = std::result::Result<T, Box<dyn error::Error>>;
 
@@ -41,6 +44,7 @@ impl AppCursor {
 #[derive(Debug)]
 pub struct App {
     pub running: bool,
+    pub needs_redraw: bool,
 
     area: Rect,
 
@@ -99,6 +103,7 @@ impl Default for App {
             // preview_constraint: Constraint::Percentage(DefaultConstraints::Preview as u16),
             preview_constraint: Constraint::Fill(3),
             running: true,
+            needs_redraw: false,
             titlebar_layout: vec![Rect::default()],
             message_layout: Rect::default(),
             message: None,
@@ -154,7 +159,7 @@ impl App {
                 [
                     Constraint::Length(1),
                     Constraint::Fill(1),
-                    Constraint::Length(5),
+                    Constraint::Length(2),
                 ]
                 .as_ref(),
             )
@@ -278,9 +283,38 @@ impl App {
         };
     }
 
+    fn open_cursor(&mut self, entry: PathBuf) {
+        // TODO handle results
+        use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
+
+        let _ = crossterm::execute!(std::io::stdout(), LeaveAlternateScreen);
+
+        #[cfg(target_os = "macos")]
+        Command::new("nvim")
+            .arg(entry)
+            .status()
+            .expect("Failed to open nvim");
+
+        #[cfg(target_os = "windows")] // TODO
+        Command::new("explorer")
+            .arg(".")
+            .spawn()
+            .expect("Failed to open directory");
+
+        #[cfg(target_os = "linux")]
+        Command::new("nvim")
+            .arg(entry)
+            .spawn()
+            .expect("Failed to open nvim");
+
+        let _ = crossterm::execute!(std::io::stdout(), EnterAlternateScreen);
+    }
+
     pub fn move_into(&mut self) {
         match &mut self.app_cursor {
             Some(cursor) if cursor.entry.is_file() => {
+                let entry = cursor.entry.clone();
+                self.open_cursor(entry);
                 // todo open in nvim
                 return;
             }
@@ -310,13 +344,14 @@ impl App {
                 match self.focus_dir.contents.get(cursor_idx) {
                     Some(cursor) => {
                         let cursor_path = cursor.to_path_buf();
-                        let first_entry = cursor_path
-                            .read_dir()
-                            .map(|entry| entry.map(|p| p.expect("W").path()))
-                            .expect("B")
-                            .collect();
+                        // let first_entry = cursor_path
+                        //     .read_dir()
+                        //     .map(|entry| entry.map(|p| p.expect("W").path()))
+                        //     .expect(&format!("{}", cursor_path.display().to_string()))
+                        //     .collect();
 
-                        self.forward_stack.push(first_entry);
+                        // self.forward_stack.push(first_entry);
+
                         // let mut contents = fs::read_dir(&path)?
                         //         .map(|res| res.map(|e| e.path()))
                         //         .collect::<Result<Vec<_>, io::Error>>()?;
@@ -483,7 +518,6 @@ impl App {
             if let Some(input) = &self.input {
                 let _ = fs::rename(&cursor.entry, &input.content);
                 self.input = None;
-                let _ = self.focus_dir.update();
             }
         }
     }

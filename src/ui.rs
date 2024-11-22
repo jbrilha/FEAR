@@ -5,12 +5,11 @@ use std::{
 
 use lopdf::Document;
 use ratatui::{
-    layout::{Alignment, Constraint, Margin, Position},
+    layout::{Alignment, Position},
     style::{Color, Style},
-    symbols::scrollbar::{self, Set},
     text::{Line, Text},
     widgets::{
-        Block, Borders, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        Block, Borders, Padding, Paragraph,
     },
     Frame,
 };
